@@ -1,16 +1,41 @@
 #include <Bluepad32.h>
-#include "Driver.h"
+int constr = 255;
+class RhinoMotor {
+  public:
+    int _DIR_PIN;
+    int _PWM_PIN;
 
-#define PWM_1 4 
-#define DIR_1 5
+    RhinoMotor(int DIR_PIN, int PWM_PIN) : _DIR_PIN(DIR_PIN), _PWM_PIN(PWM_PIN) {
+        pinMode(_DIR_PIN, OUTPUT);
+        pinMode(_PWM_PIN, OUTPUT);
+    }
 
-#define PWM_2 7
-#define DIR_2 8
+    void setSpeed(int speed) {
+        if (speed >= 0) {
+            // Forward
+            digitalWrite(_DIR_PIN, HIGH);
+            analogWrite(_PWM_PIN, speed);
+        } else {
+            // Backward
+            digitalWrite(_DIR_PIN, LOW);
+            analogWrite(_PWM_PIN, -speed);
+        }
+    }
 
-ControllerPtr myControllers[BP32_MAX_GAMEPADS];
+    void stop() {
+        analogWrite(_PWM_PIN, 0);
+    }
+};
+
+#define PWM_1 4
+#define DIR_1 16
+#define PWM_2 17
+#define DIR_2 5
 
 RhinoMotor Motor_1(DIR_1, PWM_1);
 RhinoMotor Motor_2(DIR_2, PWM_2);
+
+ControllerPtr myControllers[BP32_MAX_GAMEPADS];
 
 void onConnectedController(ControllerPtr ctl) {
     bool foundEmptySlot = false;
@@ -26,13 +51,13 @@ void onConnectedController(ControllerPtr ctl) {
         }
     }
     if (!foundEmptySlot) {
-        Serial.println("CALLBACK: Controller connected, but could not found empty slot");
+        Serial.println("CALLBACK: Controller connected, but no empty slot found");
     }
 }
 
+// Callback for when a controller is disconnected
 void onDisconnectedController(ControllerPtr ctl) {
     bool foundController = false;
-
     for (int i = 0; i < BP32_MAX_GAMEPADS; i++) {
         if (myControllers[i] == ctl) {
             Serial.printf("CALLBACK: Controller disconnected from index=%d\n", i);
@@ -41,42 +66,26 @@ void onDisconnectedController(ControllerPtr ctl) {
             break;
         }
     }
-
     if (!foundController) {
         Serial.println("CALLBACK: Controller disconnected, but not found in myControllers");
     }
 }
 
-void dumpGamepad(ControllerPtr ctl) {
-    Serial.printf(
-        "idx=%d, dpad: 0x%02x, buttons: 0x%04x, axis L: %4d, %4d, axis R: %4d, %4d, brake: %4d, throttle: %4d, "
-        "misc: 0x%02x, gyro x:%6d y:%6d z:%6d, accel x:%6d y:%6d z:%6d\n",
-        ctl->index(),        // Controller Index
-        ctl->dpad(),         // D-pad
-        ctl->buttons(),      // bitmask of pressed buttons
-        ctl->axisX(),        // (-511 - 512) left X Axis
-        ctl->axisY(),        // (-511 - 512) left Y axis
-        ctl->axisRX(),       // (-511 - 512) right X axis
-        ctl->axisRY(),       // (-511 - 512) right Y axis
-        ctl->brake(),        // (0 - 1023): brake button
-        ctl->throttle(),     // (0 - 1023): throttle (AKA gas) button
-        ctl->miscButtons(),  // bitmask of pressed "misc" buttons
-        ctl->gyroX(),        // Gyro X
-        ctl->gyroY(),        // Gyro Y
-        ctl->gyroZ(),        // Gyro Z
-        ctl->accelX(),       // Accelerometer X
-        ctl->accelY(),       // Accelerometer Y
-        ctl->accelZ()        // Accelerometer Z
-    );
-}
-
+// Function to process gamepad inputs and control motors
 void processGamepad(ControllerPtr ctl) {
-    
     if (ctl->a()) {
-      ctl->playDualRumble(0, 250, 0x80, 0x40);
-      // Stop motors
-      Motor_1.stop();
-      Motor_2.stop();
+        ctl->playDualRumble(0, 250, 0x80, 0x40);
+        Motor_1.stop();
+        Motor_2.stop();
+        return;
+    }
+
+    if (ctl->b()) {
+      constr = 200;
+    }
+
+    if (ctl->x()) {
+      constr = 255;
     }
 
     int left_axis = -ctl->axisY();
@@ -88,11 +97,12 @@ void processGamepad(ControllerPtr ctl) {
     int motor_left_speed = left_axis_mapped - right_axis_mapped;
     int motor_right_speed = left_axis_mapped + right_axis_mapped;
 
-    // Write to motor drivers
+    motor_left_speed = constrain(motor_left_speed, -constr, constr);
+    motor_right_speed = constrain(motor_right_speed, -constr, constr);
+
     Motor_1.setSpeed(motor_left_speed);
     Motor_2.setSpeed(motor_right_speed);
-
-    //dumpGamepad(ctl);
+    Serial.printf("%d %d\n", motor_left_speed, motor_right_speed);
 }
 
 void processControllers() {
@@ -101,20 +111,18 @@ void processControllers() {
             if (myController->isGamepad()) {
                 processGamepad(myController);
             } else {
-                Serial.println("Unsupported controller");
+                Serial.println("Unsupported controller type");
             }
         }
     }
 }
 
 void setup() {
-
     Serial.begin(115200);
     Serial.printf("Firmware: %s\n", BP32.firmwareVersion());
     const uint8_t* addr = BP32.localBdAddress();
     Serial.printf("BD Addr: %2X:%2X:%2X:%2X:%2X:%2X\n", addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
 
-    // Setup the Bluepad32 callbacks
     BP32.setup(&onConnectedController, &onDisconnectedController);
 
     BP32.forgetBluetoothKeys();
@@ -123,11 +131,9 @@ void setup() {
 }
 
 void loop() {
-  
     bool dataUpdated = BP32.update();
     if (dataUpdated) {
-      processControllers();
+        processControllers();
     }
-
     delay(150);
 }
